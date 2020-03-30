@@ -106,6 +106,7 @@ int main() {
            *   sequentially every .02 seconds
            */
 #if 1
+
           // previous path points size
           int prev_size = previous_path_x.size();
 
@@ -113,6 +114,43 @@ int main() {
             car_s = end_path_s;
           }
 
+          // check the current state of the road
+          bool   front_occupied = false;
+          double front_speed;
+          vector<bool> lane_occupied = {false, false, false};
+
+          // vector<vector<double>> sensor_fusion: is vector of double
+          for (int i = 0; i < sensor_fusion.size(); ++i) {
+            double check_vx = sensor_fusion[i][3];
+            double check_vy = sensor_fusion[i][4];
+            double check_s = sensor_fusion[i][5];
+            double check_d = sensor_fusion[i][6];
+            double check_speed = sqrt(check_vx * check_vx + check_vy * check_vy);
+
+            // if using previous points car project s value out current
+            double check_car_s = check_s + (double)prev_size*0.02*check_speed;
+
+            // car in my lane
+            if (check_d < (2+4*lane+2) && check_d > (2+4*lane-2)) {
+              // check s value greater than mine and s gap
+              if ((check_car_s > car_s) && ((check_car_s - car_s) < 30)) {
+                front_occupied = true;
+                front_speed = check_speed;
+              }
+            }
+
+            // Check the three lanes
+            for (int k = 0; k < 3; ++k) {
+              if (check_d > 4*k && check_d < 4*(k+1)) {
+                if ((check_car_s > car_s && (check_car_s - car_s) < 30) ||
+                    (check_car_s < car_s && (car_s - check_car_s) < 10)) {
+                  lane_occupied[k] = true;
+                }
+              }
+            }
+          } // end of sensor data loop
+
+#if IS_PEINT  // IS_PEINT define in helper.h file
           // find my lane
           int my_lane = 0xFF;
           for (int i = 0; i < 3; ++i) {
@@ -121,74 +159,25 @@ int main() {
             }
           }
 
-//          bool too_close = false;
-//          bool lane_change_allow[3] = {true, true, true}; // 0:左, 1:中, 2:右
-//          double front_speed = 49.5;
-
-          // check the current state of the road
-          double shift_threshlod = 50;
-          bool   front_occupied = false;
-          double front_speed;
-          double front_s;
-          double ego_s;
-          vector<double> lane_occupied = {false, false, false};
-
-          // vector<vector<double>> sensor_fusion: is vector of double
-          for (int i = 0; i < sensor_fusion.size(); ++i) {
-            // car is in my lane
-            double check_vx = sensor_fusion[i][3];
-            double check_vy = sensor_fusion[i][4];
-            double check_s = sensor_fusion[i][5];
-            double check_d = sensor_fusion[i][6];
-            double check_speed = sqrt(check_vx * check_vx + check_vy * check_vy);
-
-            // if using previous points car project s value out
-            double predict_check_s = check_s + (double)prev_size*0.02*check_speed;
-            double predict_car_s = car_s + (double)prev_size*0.02*car_speed;
-
-            // 本车道内，前车是否与本车过近
-            if (check_d < (2+4*lane+2) && check_d > (2+4*lane-2)) {
-              // check s value greater than mine and s gap
-              if ((check_s > car_s) && ((predict_check_s - predict_car_s) < 30)) {
-                front_occupied = true;
-                front_speed = check_speed;
-                front_s = predict_check_s;
-                ego_s = predict_car_s;
-                std::cout << "too_close: " << front_occupied
-                          << "  front_speed: " << front_speed * 2.24 << std::endl;
-              }
-            }
-
-            // 查看三个车道内是否存在与本车相对比较近的车（本车前数米，车后数米）
-            for (int k = 0; k < 3; ++k) {
-              if (check_d > 4*k && check_d < 4*(k+1)) {
-                if ((check_s > car_s && (predict_check_s - predict_car_s) < 30) ||
-                    (check_s < car_s && (car_s - check_s) < 20)) {
-                  lane_occupied[k] = true;
-                }
-              }
-            }
-
-          }
-
-#if 1
           static int num = 0;
+          static int idx = 0;
           if (num > 5) {
             num = 0;
-            std::cout << "lane change: " <<
+            idx += 1;
+            std::cout << idx << " lane ocp: " <<
                          lane_occupied[0] << "--" <<
                          lane_occupied[1] << "--" <<
-                         lane_occupied[2] << "--" << std::endl;
+                         lane_occupied[2] << "   ";
+            std::cout << "my lane: " << my_lane << std::endl;
           } else {
             ++num;
           }
 #endif
 
-          // First change lane, or reduce vehicle speed
+          // Traffic jam, the ego vehicle change lane and reduce speed
           if (front_occupied) {
-            // 可以切换到的车道
-            vector<int> candidate_lane = {0xFF, 0xFF};
-
+            // candidate lanes
+            int candidate_lane[2] = {0xFF, 0xFF};
             if (lane == 0) {
               candidate_lane[0] = 1;
             } else if (lane == 1) {
@@ -198,30 +187,32 @@ int main() {
               candidate_lane[0] = 1;
             }
 
-            bool lane_changed = false;
-
-            for (int i = 0; i < candidate_lane.size(); ++i) {
+            for (int i = 0; i < 2; ++i) {
               if (candidate_lane[i] != 0xFF) {
-                if (lane_occupied[candidate_lane[i]] == 0) {
+                if (!lane_occupied[candidate_lane[i]]) {
                   lane = candidate_lane[i];
-                  lane_changed = true;
+                  break;
                 }
               }
             }
 
-            if (!lane_changed) {
-              if (ref_vel > front_speed) {
-                ref_vel -= 0.224; // equal to 5m/s2
-              }
+            // reduce ego vehicle sppeed (m/s to mph)
+            if (ref_vel > (front_speed * 2.236836) ) {
+              ref_vel -= 0.224; // equal to 5m/s2
             }
 
           } else if (ref_vel < 49.5) {
             ref_vel += 0.224;
           }
 
+          // change to middle lane
+          if (lane != 1 && !lane_occupied[1]) {
+            lane = 1;
+#if IS_PEINT
+            std::cout << "Change to Base Lane (Middle Lane)!" << std::endl;
+#endif
+          }
 
-
-          ///*************** smoothing the path ***************
           vector<double> ptsx;
           vector<double> ptsy;
 
@@ -275,8 +266,7 @@ int main() {
           ptsy.push_back(next_wp2[1]);
 
           // transformation to this local car's coordinates (some like MPC)
-          // 注意： the last points of the previous path is at zero
-          // 具体公式细节后续在做证明 2.28
+          // ****： the last points of the previous path is at zero
           for (int i = 0; i < ptsx.size(); ++i) {
             // 注意：shift car reference angle to 0 degrees
             double shift_x = ptsx[i] - ref_x;
@@ -317,7 +307,7 @@ int main() {
             double x_ref = x_point;
             double y_ref = y_point;
 
-            // rotate back to normal after rotating it eariler
+            // rotate back
             x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
             y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
 
@@ -327,7 +317,9 @@ int main() {
             next_x_vals.push_back(x_point);
             next_y_vals.push_back(y_point);
           }
+
 #endif
+
 #if 0
           double dist_inc = 0.4;
           for (int i = 0; i < 50; ++i) {
@@ -344,6 +336,7 @@ int main() {
             // next_y_vals.push_back(car_y + (dist_inc*i)*sin(deg2rad(car_yaw)));
           }
 #endif
+
 #if 0
           double pos_x;
           double pos_y;
